@@ -355,10 +355,13 @@ class Parser:
             while self.current().type == TokenType.EQUAL:
                 self.position += 1
                 production.rhs.choices.extend(
-                    self._parse_choice_list(TokenType.NEWLINE, "", False, "production")
+                    self._parse_choice_list(
+                        TokenType.NEWLINE, "", False, "production alternative"
+                    )
                 )
                 if self.current().type == TokenType.NEWLINE:
                     self.position += 1
+
             return production
         else:
             self.position = oldPosition
@@ -377,8 +380,8 @@ if __name__ == "__main__":
     sample = r"""
         # Example MGF input
         Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
-        \optional:Pattern = Pattern | 
-            \repeat{1-5}Letter
+        \optional:Pattern = Pattern 
+                          = \repeat{1-5}Letter
         IdentifierWithQuotes = 'a''b'c' 'd'  # demonstrates quoted parts concatenated
         GroupExample = (Digit Letter Digit)
         Expr = Expression ('+' | '-') Number
