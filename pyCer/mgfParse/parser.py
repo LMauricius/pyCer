@@ -64,13 +64,11 @@ def lex(code: str) -> List[Token]:
         last_end = match.end()
 
         if kind == TokenType.COMMENT.name:
-            line += 1
-            col = 1
-            ws_before = True
+            col += len(value)
         elif kind == TokenType.NEWLINE.name:
             line += 1
             col = 1
-            tokens.append(Token(TokenType[kind], value, line, col, ws_before))
+            tokens.append(Token(TokenType[kind], "a new line", line, col, ws_before))
             ws_before = True
         elif kind == TokenType.WS.name:
             col += len(value)
@@ -80,7 +78,7 @@ def lex(code: str) -> List[Token]:
             col += len(value)
             ws_before = False
 
-    tokens.append(Token(TokenType.EOF, "", line, col, ws_before))
+    tokens.append(Token(TokenType.EOF, "the end of file", line, col, ws_before))
     return tokens
 
 
@@ -155,20 +153,20 @@ class Parser:
     # -----------------------------
     # Public API
     # -----------------------------
-    def parse(self) -> List[Item]:
-        result: List[Item] = []
-        return result
+    def parse(self) -> Group:
+        return Group(
+            self._parse_choice_list(TokenType.EOF, "the end of file", True, "MGF file")
+        )
 
     def current(self) -> Token:
         return self.tokens[self.position]
 
-    @dataclass
-    class ParseState:
-        position: int
-        errors: List[ParseError]
-
     def _parse_choice_list(
-        self, terminatorType: TokenType, terminator: str, multiline: bool
+        self,
+        terminatorType: TokenType,
+        terminator: str,
+        multiline: bool,
+        targetFriendlyName: str,
     ) -> List[Choice]:
         """
         Parse a list of choices, ended by a terminator.
@@ -178,53 +176,64 @@ class Parser:
         choice = Choice([])
         choices: List[Choice] = [choice]
 
-        while (
-            self.current().type != terminatorType.name
-            or self.current().text != terminator
+        startPos = self.position
+
+        while not (
+            self.current().type == terminatorType
+            and (
+                terminatorType == TokenType.EOF
+                or terminatorType == TokenType.NEWLINE
+                or self.current().text == terminator
+            )
         ):
             if multiline:
-                while self.current().type == TokenType.NEWLINE.name:
+                while self.current().type == TokenType.NEWLINE:
                     self.position += 1
 
-            if self.current().type == TokenType.EOF.name:
+            if self.current().type == TokenType.EOF:  # and it's not the terminator
                 self.errors.append(
                     ParseError(
-                        self.position,
-                        f"File ended before closing {self.current().text} with {terminator}",
+                        startPos,
+                        f"File ended before closing {targetFriendlyName} with {terminator}",
                     )
                 )
                 return choices
+
+            if self.current().type == TokenType.PIPE:
+                self.position += 1
+                choice = Choice([])
+                choices.append(choice)
             else:
                 item = self._parse_item()
                 if item is not None:
                     choice.items.append(item)
-                self.position += 1
+                elif self.current().type != TokenType.EOF:
+                    self.errors.append(
+                        ParseError(
+                            self.position,
+                            f"Did not expect {self.current().text}",
+                        )
+                    )
+                    self.position += 1
 
         return choices
 
     def _parse_item(self) -> Optional[Item]:
-        if (item := self._try_parse_identifier()) is not None:
-            pass
-        elif (item := self._try_parse_function_call()) is not None:
-            pass
-        elif (item := self._try_parse_group()) is not None:
-            pass
-        else:
-            self.errors.append(
-                ParseError(
-                    self.position,
-                    f"Unexpected token: {self.current().text}",
-                )
-            )
-            self.position += 1
-            return None
-
-        if self.current().type == TokenType.EQUAL:
-            self.position += 1
-            production = self._parse_production_rhs(item)
-            return production
-        else:
+        """
+        Parse any item, if possible
+        Returns the item and consumes tokens if successful.
+        Returns None if the current token is not a start of an item
+        """
+        if (item := self._try_parse_production()) is not None:
             return item
+        elif (item := self._try_parse_identifier()) is not None:
+            return item
+        elif (item := self._try_parse_function_call()) is not None:
+            return item
+        elif (item := self._try_parse_group()) is not None:
+            return item
+        else:
+            return None
 
     def _try_parse_identifier(self) -> Optional[Identifier]:
         """
@@ -251,14 +260,55 @@ class Parser:
         """
         if self.current().type == TokenType.LPAREN:
             self.position += 1
-            choices = self._parse_choice_list(TokenType.RPAREN, ")")
-            self.position += 1
+            choices = self._parse_choice_list(TokenType.RPAREN, ")", True, "group")
+            if self.current().type == TokenType.RPAREN:
+                self.position += 1
             return Group(choices)
         else:
             return None
 
-    def _parse_production_rhs(self, name: Item) -> Production:
-        pass
+    def _try_parse_production(self) -> Optional[Production]:
+        """
+        Parse a production, if possible
+        Returns the production and consumes tokens if successful.
+        Returns None if the current token is not a start of a production
+        """
+        oldPosition = self.position
+        oldErrorCount = len(self.errors)
+
+        if (nameItem := self._try_parse_identifier()) is not None:
+            pass
+        elif (nameItem := self._try_parse_function_call()) is not None:
+            pass
+        else:
+            return None
+
+        if self.current().type == TokenType.EQUAL:
+            self.position += 1
+            production = Production(
+                nameItem,
+                Group(
+                    self._parse_choice_list(
+                        TokenType.NEWLINE, "a new line", False, "production"
+                    )
+                ),
+            )
+            if self.current().type == TokenType.NEWLINE:
+                self.position += 1
+
+            # Alternatives with '=' sign
+            while self.current().type == TokenType.EQUAL:
+                self.position += 1
+                production.rhs.choices.extend(
+                    self._parse_choice_list(TokenType.NEWLINE, "", False, "production")
+                )
+                if self.current().type == TokenType.NEWLINE:
+                    self.position += 1
+            return production
+        else:
+            self.position = oldPosition
+            self.errors = self.errors[:oldErrorCount]
+            return None
 
 
 # ============================
@@ -282,10 +332,16 @@ if __name__ == "__main__":
     """
 
     tokens = lex(sample)
+
+    print("TOKENS:")
+    pprint.pprint(tokens)
+
     parser = Parser(tokens)
     ast = parser.parse()
 
-    print("TOKENS (first 40):")
-    pprint.pprint(tokens[:40])
     print("\nAST:")
     pprint.pprint(ast)
+    for error in parser.errors:
+        print(
+            f"Error @{tokens[error.pos].line}:{tokens[error.pos].col}: {error.message}"
+        )
