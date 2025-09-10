@@ -7,7 +7,8 @@ from enum import Enum, auto
 # === Lexer Implementation ===
 # ============================
 
-UNICODE_IDENT = r"([\p{L}\p{M}\p{N}_]|'.')+"
+UNICODE_IDENT_LETTER = r"\p{L}\p{M}\p{N}_"
+UNICODE_IDENT = r"([" + UNICODE_IDENT_LETTER + r"]|'.')+"
 
 
 # Types of tokens
@@ -91,31 +92,88 @@ def lex(code: str) -> List[Token]:
 class Identifier:
     name: str
 
+    def __str__(self):
+        return re.sub(r"([^" + UNICODE_IDENT_LETTER + r"])", r"'\1'", self.name)
+
 
 @dataclass
 class Symbol:
     value: str
+
+    def __str__(self):
+        return self.value
 
 
 @dataclass
 class Choice:
     items: List["Item"]
 
+    def __str__(self):
+        # Check if we have productions
+        hasProd = False
+        for item in self.items:
+            if isinstance(item, Production):
+                hasProd = True
+                break
+
+        if hasProd:
+            # If we have productions, use a multi-line format
+            # Add indents to each line
+            return "\n".join([str(item) for item in self.items])
+        else:
+            return " ".join([str(item) for item in self.items])
+
 
 @dataclass
 class Group:
     choices: List[Choice]
+
+    def __str__(self):
+        # Check if we have productions
+        hasProd = False
+        for choice in self.choices:
+            for item in choice.items:
+                if isinstance(item, Production):
+                    hasProd = True
+                    break
+            if hasProd:
+                break
+
+        if hasProd:
+            # If we have productions, use a multi-line format
+            # Add indents to each line
+            return (
+                "(\n    "
+                + "\n| ".join([str(choice) for choice in self.choices]).replace(
+                    "\n", "\n    "
+                )
+                + "\n)"
+            )
+        else:
+            return "(" + " | ".join([str(choice) for choice in self.choices]) + ")"
 
 
 @dataclass
 class FunctionCall:
     parts: List[Union[Symbol, "Item"]]
 
+    def __str__(self):
+        return "".join([str(part) for part in self.parts])
+
 
 @dataclass
 class Production:
     name: Union[Identifier, FunctionCall]
     rhs: Group
+
+    def __str__(self):
+        namestr = str(self.name)
+        spacePrefix = " " * (len(namestr) + 1)
+        return (
+            namestr
+            + " = "
+            + f"\n{spacePrefix}= ".join([str(choice) for choice in self.rhs.choices])
+        )
 
 
 Item = Union[Identifier, Group, FunctionCall, Production]
@@ -384,7 +442,7 @@ if __name__ == "__main__":
                           = \repeat{1-5}Letter
         IdentifierWithQuotes = 'a''b'c' 'd'  # demonstrates quoted parts concatenated
         GroupExample = (Digit Letter Digit)
-        Expr = Expression ('+' | '-') Number
+        Expr = Expression ('+' |'-') Number
         \thrice:Pattern = Pattern Pattern Pattern
         # end
     """
@@ -398,7 +456,8 @@ if __name__ == "__main__":
     ast = parser.parse()
 
     print("\nAST:")
-    pprint.pprint(ast)
+    # pprint.pprint(ast)
+    print(str(ast))
     for error in parser.errors:
         print(
             f"Error @{tokens[error.pos].line}:{tokens[error.pos].col}: {error.message}"
