@@ -155,7 +155,7 @@ class Parser:
     # -----------------------------
     def parse(self) -> Group:
         return Group(
-            self._parse_choice_list(TokenType.EOF, "the end of file", True, "MGF file")
+            self._parse_choice_list(TokenType.EOF, "the end of file", True, "MGF text")
         )
 
     def current(self) -> Token:
@@ -178,6 +178,10 @@ class Parser:
 
         startPos = self.position
 
+        if multiline:
+            while self.current().type == TokenType.NEWLINE:
+                self.position += 1
+
         while not (
             self.current().type == terminatorType
             and (
@@ -186,10 +190,6 @@ class Parser:
                 or self.current().text == terminator
             )
         ):
-            if multiline:
-                while self.current().type == TokenType.NEWLINE:
-                    self.position += 1
-
             if self.current().type == TokenType.EOF:  # and it's not the terminator
                 self.errors.append(
                     ParseError(
@@ -214,6 +214,10 @@ class Parser:
                             f"Did not expect {self.current().text}",
                         )
                     )
+                    self.position += 1
+
+            if multiline:
+                while self.current().type == TokenType.NEWLINE:
                     self.position += 1
 
         return choices
@@ -250,7 +254,58 @@ class Parser:
             return None
 
     def _try_parse_function_call(self) -> Optional[FunctionCall]:
-        pass
+        """
+        Parse a function call item, if possible
+        Returns the function call and consumes tokens if successful.
+        Returns None if the current token is not a start of a function call
+        """
+        oldPosition = self.position
+        oldErrorCount = len(self.errors)
+        func = FunctionCall([])
+
+        hasSymbol = False
+        hasItem = False
+        itemBefore = False
+        while True:
+            if self.current().type != TokenType.EOF and (
+                len(func.parts) == 0 or not self.current().ws_before
+            ):
+                currentPosition = self.position
+                if self.current().type == TokenType.SYMBOL:
+                    func.parts.append(self.current().text)
+                    self.position += 1
+                    itemBefore = False
+                    hasSymbol = True
+                    continue
+                elif (item := self._try_parse_identifier()) is not None or (
+                    item := self._try_parse_group()
+                ) is not None:
+                    if itemBefore:
+                        self.errors.append(
+                            ParseError(
+                                currentPosition,
+                                "Two items without a symbol between them",
+                            )
+                        )
+                    func.parts.append(item)
+                    itemBefore = True
+                    hasItem = True
+                    continue
+            break
+
+        if len(func.parts) >= 2:
+            if not hasSymbol:
+                self.errors.append(
+                    ParseError(
+                        oldPosition,
+                        "Function call without symbols",
+                    )
+                )
+            return func
+        else:
+            self.position = oldPosition
+            self.errors = self.errors[:oldErrorCount]
+            return None
 
     def _try_parse_group(self) -> Optional[Group]:
         """
